@@ -1,0 +1,65 @@
+# Model configuration for Waymo Open Dataset Challenge
+
+# Data parameters
+data:
+  image_height: 480
+  image_width: 640
+  num_cameras: 8
+  history_seconds: 12
+  future_seconds: 5
+  fps: 10
+  normalize_poses: true
+  train_val_split_ratio: 0.8  # 80% training, 20% validation
+  
+# Model architecture
+model:
+  name: "e2e_driving_model"
+  image_backbone: "efficientnet_b3"
+  use_pretrained: true
+  image_embedding_dim: 512
+  pose_embedding_dim: 128
+  route_embedding_dim: 64
+  fusion_dim: 256
+  lstm_hidden_dim: 512
+  lstm_num_layers: 2
+  dropout_rate: 0.1
+  prediction_horizon: 50  # 5 seconds at 10 Hz
+  prediction_dim: 2       # x, y coordinates
+  use_attention: true
+  scenario_classification: true
+  num_scenario_classes: 12  # Number of scenario types to classify
+  
+# Training parameters
+training:
+  batch_size: 16
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  num_epochs: 100
+  lr_scheduler: "cosine"
+  warmup_epochs: 5
+  save_freq: 1
+  val_freq: 1
+  
+# Optimizer
+optimizer:
+  name: "adam"
+  beta1: 0.9
+  beta2: 0.999
+  
+# Loss weights
+loss_weights:
+  waypoint_loss: 1.0
+  ade_loss: 1.0
+  scenario_classification_loss: 0.5
+  trust_region_loss: 2.0
+
+# Evaluation metrics
+metrics:
+  use_rater_feedback_score: true
+  use_ade: true
+  
+# Paths - using relative paths for portability
+paths:
+  data_dir: "tfrecords"  # Relative to the training directory
+  checkpoint_dir: "checkpoints"  # Relative to the training directory
+  output_dir: "outputs"  # Relative to the training directory
