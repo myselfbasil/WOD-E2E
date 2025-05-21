@@ -1,50 +1,63 @@
 # Waymo Open Dataset End-to-End Driving Challenge
 
-This repository contains a complete pipeline for the Waymo Open Dataset Vision-based End-to-End Driving Challenge. The pipeline handles data preprocessing, model training, inference, and submission preparation.
+This repository contains a complete training pipeline for the Waymo Open Dataset Vision-based End-to-End Driving Challenge. The code handles data processing from TFRecord files, model training using a state-of-the-art architecture with attention mechanisms, and evaluation using the official Waymo metrics.
 
-## Quick Start
+## Challenge Overview
 
-To run the entire pipeline in sequence:
+The Waymo End-to-End Driving Challenge requires participants to predict 5-second future waypoints for autonomous driving based on camera images and historical data. Success is measured using the Rater Feedback Score (RFS) as the primary evaluation metric.
 
-```bash
-cd /Users/basilshaji/Projects/wod-challenges/training
-python run_pipeline.py
-```
+## Repository Structure
+
+- `/configs` - Configuration files for model architecture and training
+- `/data` - Data loading and processing modules
+- `/models` - Model architecture definitions
+- `/utils` - Utilities for losses, metrics, and visualization
+- `/tfrecords` - Directory for TFRecord files (not included in repo)
+- `/checkpoints` - Directory for saving model checkpoints
+- `/outputs` - Directory for saving logs and visualizations
 
 ## Setup Instructions
 
-1. **Install Dependencies**:
+1. **Create a Virtual Environment** (recommended):
    ```bash
-   cd /Users/basilshaji/Projects/wod-challenges/training
+   python -m venv wod_env
+   source wod_env/bin/activate  # On Windows: wod_env\Scripts\activate
+   ```
+
+2. **Install Dependencies**:
+   ```bash
    pip install -r requirements.txt
    ```
 
-2. **Verify Data**:
-   - Ensure your TFRecord files are in the `/training/tfrecords` directory
-   - The pipeline automatically splits these files for training and validation
+3. **Prepare Data**:
+   - Place your Waymo Open Dataset TFRecord files in the `tfrecords` directory
+   - The code automatically handles train/validation splitting
 
-## Step-by-Step Execution
+## Training Pipeline
 
-### 1. Training the Model
+### 1. Start Model Training
 
 ```bash
-cd /Users/basilshaji/Projects/wod-challenges/training
 python train.py --config configs/model_config.yaml
 ```
 
 This will:
-- Split your data into training (80%) and validation (20%) sets
-- Train the model according to the configuration
-- Save checkpoints to the `checkpoints` directory
-- Log training metrics and visualizations to the `outputs` directory
+- Load TFRecord files and prepare training/validation datasets
+- Build the model architecture as specified in the config
+- Train the model with the specified parameters
+- Log metrics and save checkpoints automatically
 
-**Training Parameters**:
-- Model architecture is defined in the configuration file
-- Default batch size is 16
-- Default learning rate is 0.0003 with cosine decay
-- Training runs for 100 epochs by default
+### 2. Training Configuration
 
-### 2. Generating Predictions
+The `configs/model_config.yaml` file contains all settings for the model and training process including:
+
+- Model architecture parameters
+- Learning rate and optimizer settings
+- Input/output specifications
+- Loss function weights
+- Evaluation metrics
+
+### 3. Generating Predictions
 
 Once you have a trained model, generate predictions on test data:
 

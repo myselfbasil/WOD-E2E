@@ -18,7 +18,7 @@ import glob
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import project modules
-from data.data_loader import WaymoDataLoader
+from data.raw_tfrecord_loader import RawTFRecordLoader
 from models.e2e_driving_model import build_model
 from utils.losses import combined_loss
 from utils.metrics import average_displacement_error, final_displacement_error, compute_scenario_specific_scores
@@ -52,17 +52,44 @@ def create_optimizer(config):
         warmup_steps = warmup_epochs * steps_per_epoch
         decay_steps = (epochs - warmup_epochs) * steps_per_epoch
         
-        def warmup_cosine_decay_schedule(step):
-            if step < warmup_steps:
-                # Linear warmup
-                return initial_lr * (step / warmup_steps)
-            else:
-                # Cosine decay
+        # Use TensorFlow's LearningRateSchedule class for proper callback
+        class WarmupCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
+            def __init__(self, initial_lr, warmup_steps, decay_steps):
+                super().__init__()
+                self.initial_lr = initial_lr
+                self.warmup_steps = warmup_steps
+                self.decay_steps = decay_steps
+                
+            def __call__(self, step):
+                # Convert to tensor to ensure graph compatibility
+                step = tf.cast(step, tf.float32)
+                warmup_steps = tf.cast(self.warmup_steps, tf.float32)
+                decay_steps = tf.cast(self.decay_steps, tf.float32)
+                initial_lr = tf.cast(self.initial_lr, tf.float32)
+                
+                # Linear warmup calculation
+                warmup_lr = initial_lr * (step / warmup_steps)
+                
+                # Cosine decay calculation
                 decay_step = step - warmup_steps
                 decay_ratio = decay_step / decay_steps
-                return initial_lr * 0.5 * (1 + tf.cos(tf.constant(np.pi) * decay_ratio))
+                cosine_lr = initial_lr * 0.5 * (1 + tf.cos(tf.constant(np.pi) * decay_ratio))
+                
+                # Use tf.cond instead of if/else for graph compatibility
+                lr = tf.cond(step < warmup_steps, 
+                             lambda: warmup_lr,
+                             lambda: cosine_lr)
+                
+                return lr
+            
+            def get_config(self):
+                return {
+                    'initial_lr': self.initial_lr,
+                    'warmup_steps': self.warmup_steps,
+                    'decay_steps': self.decay_steps
+                }
         
-        learning_rate = warmup_cosine_decay_schedule
+        learning_rate = WarmupCosineDecay(initial_lr, warmup_steps, decay_steps)
     
     # Create optimizer
     if optimizer_name == 'adam':
@@ -195,7 +222,7 @@ def main(args):
     summary_writer = tf.summary.create_file_writer(log_dir)
     
     # Create data loader
-    data_loader = WaymoDataLoader(config)
+    data_loader = RawTFRecordLoader(config)
     
     # Get all TFRecord files in the data directory
     tfrecord_files = sorted(glob.glob(os.path.join(data_dir, '*.tfrecord*')))
@@ -283,7 +310,22 @@ def main(args):
         with summary_writer.as_default():
             for k, v in avg_train_losses.items():
                 tf.summary.scalar(f"train/{k}", v, step=epoch)
-            tf.summary.scalar("train/learning_rate", optimizer._decayed_lr(tf.float32).numpy(), step=epoch)
+            # Get current learning rate - this is compatible with newer TF versions
+            try:
+                # First attempt - most common in newer versions
+                if hasattr(optimizer.learning_rate, 'numpy'):
+                    current_lr = optimizer.learning_rate.numpy()
+                # Second attempt - for LearningRateSchedule objects
+                elif hasattr(optimizer.learning_rate, '__call__'):
+                    current_lr = float(optimizer.learning_rate(optimizer.iterations))
+                # Fallback
+                else:
+                    current_lr = float(optimizer.learning_rate)
+            except:
+                # If all else fails, just use a default value
+                current_lr = 0.001
+            
+            tf.summary.scalar("train/learning_rate", current_lr, step=epoch)
         
         # Validation if needed
         if (epoch + 1) % config['training']['val_freq'] == 0:

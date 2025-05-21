@@ -314,7 +314,23 @@ def compute_scenario_specific_scores(
     # Compute ADE for each example
     for i in range(len(scenario_types)):
         scenario_id = scenario_types[i]
-        scenario_name = scenario_map.get(scenario_id, "others")
+        
+        # Handle different scenario_id formats
+        if hasattr(scenario_id, 'numpy'):
+            # TensorFlow tensor
+            scenario_id_value = scenario_id.numpy()
+        elif isinstance(scenario_id, np.ndarray):
+            # Already a numpy array - for one-hot encoded, get the index
+            if len(scenario_id.shape) > 0 and scenario_id.shape[0] > 1:
+                scenario_id_value = np.argmax(scenario_id)
+            else:
+                scenario_id_value = int(scenario_id)
+        else:
+            # Regular Python value
+            scenario_id_value = scenario_id
+            
+        # Get scenario name or default to "others"
+        scenario_name = scenario_map.get(scenario_id_value, "others")
         
         # Compute ADE for this example
         ade = average_displacement_error(
