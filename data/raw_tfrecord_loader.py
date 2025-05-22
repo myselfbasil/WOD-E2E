@@ -24,8 +24,10 @@ class RawTFRecordLoader:
         self.image_width = config['data'].get('image_width', 640)
         self.num_cameras = config['data'].get('num_cameras', 8)
         self.history_seconds = config['data'].get('history_seconds', 12)
-        self.future_seconds = config['data'].get('future_seconds', 5)
-        self.fps = config['data'].get('fps', 10)
+        # Use prediction settings for future waypoints - Waymo Challenge requires 4Hz
+        self.future_seconds = config['prediction'].get('future_seconds', 5)
+        self.pred_hz = config['prediction'].get('hz', 4)  # Waymo Challenge uses 4Hz
+        self.fps = config['data'].get('fps', 10)  # Input data fps
         self.normalize_poses = config['data'].get('normalize_poses', True)
         
         # Camera order: front_left, front, front_right
@@ -68,12 +70,13 @@ class RawTFRecordLoader:
         # Create dummy trajectory data
         # In a real implementation, this would parse the proto message
         past_steps = self.history_seconds * self.fps
-        future_steps = self.future_seconds * self.fps
+        future_steps = self.future_seconds * self.pred_hz  # 20 steps for 5 seconds at 4Hz
         
         # Past states: x, y, z, heading, vel_x, vel_y
         past_states = tf.random.normal([past_steps, 6])
         
         # Future states: x, y, z, heading, vel_x, vel_y
+        # Important: For Waymo Challenge, predictions must be at 4Hz
         future_states = tf.random.normal([future_steps, 6])
         
         # Future waypoints: x, y
@@ -223,8 +226,10 @@ class RawTFRecordLoader:
             route = tf.random.normal([10, 2])
             
             # Make sure to provide all expected fields for the model
-            # Create one-hot encoded scenario type to fix gradient issue (0-3)
-            scenario_type = tf.one_hot(tf.random.uniform([], 0, 4, dtype=tf.int32), 4)
+            # Create one-hot encoded scenario type that matches the model's expectations
+            # The model uses 12 scenario classes as defined in model_config.yaml
+            num_scenario_classes = 12  # Match model_config.yaml setting
+            scenario_type = tf.one_hot(tf.random.uniform([], 0, num_scenario_classes, dtype=tf.int32), num_scenario_classes)
             
             inputs = {
                 'images': images,
@@ -234,8 +239,9 @@ class RawTFRecordLoader:
             }
             
             if not is_test:
-                future_waypoints = tf.random.normal([self.future_seconds * self.fps, 2])
-                future_states = tf.random.normal([self.future_seconds * self.fps, 6])
+                # Generate predictions at 4Hz as required by Waymo Challenge
+                future_waypoints = tf.random.normal([self.future_seconds * self.pred_hz, 2])
+                future_states = tf.random.normal([self.future_seconds * self.pred_hz, 6])
                 
                 targets = {
                     'future_states': future_states,

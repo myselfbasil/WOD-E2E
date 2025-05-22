@@ -282,9 +282,94 @@ def rater_feedback_score_loss(
     return loss
 
 
+def trajectory_smoothness_loss(pred_waypoints):
+    """
+    Penalize non-smooth trajectories to improve prediction quality.
+    
+    Args:
+        pred_waypoints: Predicted waypoints tensor of shape [batch_size, num_steps, 2]
+        
+    Returns:
+        Smoothness loss value
+    """
+    # Calculate acceleration (second derivative of position)
+    # First, get velocity (first derivative)
+    velocity = pred_waypoints[:, 1:] - pred_waypoints[:, :-1]
+    
+    # Then, get acceleration (derivative of velocity)
+    if velocity.shape[1] > 1:  # Need at least 2 velocity points to calculate acceleration
+        acceleration = velocity[:, 1:] - velocity[:, :-1]
+        
+        # Penalize large accelerations (encourages smooth trajectories)
+        acc_square = tf.reduce_sum(tf.square(acceleration), axis=-1)
+        smoothness_loss = tf.reduce_mean(acc_square)
+        return smoothness_loss
+    else:
+        # If not enough points, return zero
+        return tf.constant(0.0, dtype=pred_waypoints.dtype)
+
+
+def waypoint_prediction_loss(pred_waypoints, true_waypoints):
+    """
+    Advanced waypoint prediction loss with increasing weight for distant waypoints.
+    
+    Args:
+        pred_waypoints: Predicted waypoints [batch_size, horizon, 2]
+        true_waypoints: Ground truth waypoints [batch_size, horizon, 2]
+        
+    Returns:
+        Weighted waypoint loss
+    """
+    # Calculate squared errors
+    squared_error = tf.reduce_sum(tf.square(pred_waypoints - true_waypoints), axis=-1)
+    
+    # Create importance weights that increase with horizon time
+    # This puts more emphasis on getting long-term predictions correct
+    horizon = tf.shape(pred_waypoints)[1]
+    time_weights = tf.range(1.0, tf.cast(horizon, tf.float32) + 1.0) / tf.cast(horizon, tf.float32)
+    time_weights = 0.5 + time_weights * 0.5  # Scale to [0.5, 1.0] to avoid ignoring early predictions
+    
+    # Apply time-based weighting
+    weighted_error = squared_error * time_weights
+    
+    # Compute mean
+    return tf.reduce_mean(weighted_error)
+
+
+def trustworthiness_loss(pred_waypoints):
+    """
+    Loss encouraging physically plausible predictions.
+    
+    Args:
+        pred_waypoints: Predicted waypoints [batch_size, horizon, 2]
+        
+    Returns:
+        Trustworthiness loss
+    """
+    # Calculate velocities between consecutive waypoints
+    velocities = pred_waypoints[:, 1:] - pred_waypoints[:, :-1]
+    
+    # Compute speed at each step
+    speeds = tf.sqrt(tf.reduce_sum(tf.square(velocities), axis=-1) + 1e-6)
+    
+    # Penalize excessive acceleration/deceleration
+    if speeds.shape[1] > 1:
+        accelerations = speeds[:, 1:] - speeds[:, :-1]
+        acc_penalty = tf.reduce_mean(tf.square(accelerations))
+    else:
+        acc_penalty = 0.0
+    
+    # Penalize unrealistic speeds (very high values)
+    speed_penalty = tf.reduce_mean(tf.square(tf.maximum(speeds - 25.0, 0.0)))
+    
+    # Combine penalties
+    return acc_penalty + speed_penalty
+
+
 def combined_loss(outputs: Dict, targets: Dict, config: Dict) -> Dict:
     """
-    Combined loss function for training.
+    Enhanced combined loss function for training with special focus on
+    scenario-specific improvement to surpass leaderboard scores.
     
     Args:
         outputs: Dict of model outputs
@@ -298,7 +383,7 @@ def combined_loss(outputs: Dict, targets: Dict, config: Dict) -> Dict:
     pred_waypoints = outputs['pred_waypoints']
     true_waypoints = targets['future_waypoints']
     
-    # Extract initial speed from past states
+    # Extract initial speed from past states if available
     past_states = targets.get('past_states')
     if past_states is not None:
         initial_speed = tf.sqrt(
@@ -309,47 +394,79 @@ def combined_loss(outputs: Dict, targets: Dict, config: Dict) -> Dict:
         # Default to mid-range speed if not available
         initial_speed = tf.ones([tf.shape(pred_waypoints)[0]]) * 5.0
     
-    # Compute basic waypoint loss
-    wp_loss = waypoint_loss(pred_waypoints, true_waypoints)
-    
-    # Compute ADE
+    # Compute enhanced losses
+    wp_loss = waypoint_prediction_loss(pred_waypoints, true_waypoints)
     ade = average_displacement_error(pred_waypoints, true_waypoints)
-    
-    # Compute trust region loss
-    trust_loss = trust_region_loss(pred_waypoints, true_waypoints, initial_speed)
-    
-    # Compute RFS-approximating loss
+    trust_loss = trustworthiness_loss(pred_waypoints)
+    smoothness_loss = trajectory_smoothness_loss(pred_waypoints)
     rfs_loss = rater_feedback_score_loss(pred_waypoints, true_waypoints, initial_speed)
     
-    # Initialize loss components
+    # Add special attention to challenging scenarios (from leaderboard)
+    # These are the scenarios where the current leader is weaker
+    spotlight_bonus = 0.0
+    others_bonus = 0.0
+    
+    # Special handling for scenario classification if available
+    scenario_loss = 0.0
+    if 'scenario_logits' in outputs and 'scenario_type' in targets:
+        # Ensure the scenario loss properly connects to the model
+        scenario_logits = outputs['scenario_logits']
+        scenario_targets = targets['scenario_type']
+        
+        # Calculate cross-entropy loss directly
+        scenario_loss = tf.reduce_mean(
+            tf.keras.losses.categorical_crossentropy(
+                scenario_targets,
+                scenario_logits,
+                from_logits=True
+            )
+        )
+        
+        # Extract scenario types if available to apply special weighting
+        if 'scenario_type' in targets:
+            scenario_types = targets['scenario_type']
+            # If one-hot encoded, get the class indices
+            if len(tf.shape(scenario_types)) > 1 and tf.shape(scenario_types)[-1] > 1:
+                # Apply extra penalty for spotlight scenarios (weakest in leaderboard)
+                spotlight_indices = tf.argmax(scenario_types, axis=-1) == 10  # Spotlight scenario index
+                spotlight_bonus = tf.reduce_mean(tf.cast(spotlight_indices, tf.float32) * ade) * 0.5
+                
+                # Apply extra penalty for 'others' scenarios (also weak in leaderboard)
+                others_indices = tf.argmax(scenario_types, axis=-1) == 11  # Others scenario index
+                others_bonus = tf.reduce_mean(tf.cast(others_indices, tf.float32) * ade) * 0.3
+    
+    # Prepare loss components dictionary
     loss_components = {
         'waypoint_loss': wp_loss,
         'ade': ade,
         'trust_loss': trust_loss,
-        'rfs_loss': rfs_loss
+        'smoothness_loss': smoothness_loss,
+        'rfs_loss': rfs_loss,
+        'scenario_loss': scenario_loss,
+        'spotlight_bonus': spotlight_bonus,
+        'others_bonus': others_bonus
     }
     
-    # Add scenario classification loss if available
-    if 'scenario_logits' in outputs and 'scenario_type' in targets:
-        scenario_loss = scenario_classification_loss(
-            outputs['scenario_logits'],
-            targets['scenario_type']
-        )
-        loss_components['scenario_loss'] = scenario_loss
-    else:
-        scenario_loss = 0.0
+    # Get loss weights from config with fallbacks
+    weights = config.get('loss_weights', {
+        'waypoint_loss': 1.0,
+        'ade_loss': 0.8,
+        'trust_region_loss': 0.5,
+        'smoothness_loss': 0.3,
+        'rfs_loss': 1.2,
+        'scenario_classification_loss': 0.1
+    })
     
-    # Compute weighted sum of losses
-    weights = config['loss_weights']
+    # Compute weighted sum of losses with enhanced components
     total_loss = (
-        weights['waypoint_loss'] * wp_loss +
-        weights['ade_loss'] * ade +
-        weights['trust_region_loss'] * trust_loss
+        weights.get('waypoint_loss', 1.0) * wp_loss +
+        weights.get('ade_loss', 0.8) * ade +
+        weights.get('trust_region_loss', 0.5) * trust_loss +
+        weights.get('smoothness_loss', 0.3) * smoothness_loss +
+        weights.get('rfs_loss', 1.2) * rfs_loss +
+        weights.get('scenario_classification_loss', 0.1) * scenario_loss +
+        spotlight_bonus + others_bonus
     )
-    
-    # Add scenario classification loss if available
-    if 'scenario_logits' in outputs and 'scenario_type' in targets:
-        total_loss += weights['scenario_classification_loss'] * scenario_loss
     
     loss_components['total_loss'] = total_loss
     

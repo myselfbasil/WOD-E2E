@@ -47,6 +47,11 @@ This will:
 - Train the model with the specified parameters
 - Log metrics and save checkpoints automatically
 
+The model is configured specifically for the Waymo Challenge requirements:
+- 5-second future trajectory prediction
+- 4Hz prediction frequency (20 total waypoints)
+- Evaluation using Rater Feedback Score (RFS)
+
 ### 2. Training Configuration
 
 The `configs/model_config.yaml` file contains all settings for the model and training process including:
@@ -57,13 +62,21 @@ The `configs/model_config.yaml` file contains all settings for the model and tra
 - Loss function weights
 - Evaluation metrics
 
-### 3. Generating Predictions
+### 3. Generating Predictions and Submissions
 
-Once you have a trained model, generate predictions on test data:
+Once you have a trained model, generate predictions for the Waymo Challenge using the submission script:
 
 ```bash
-python inference.py --checkpoint_path checkpoints/ckpt-XX --batch_size 32
+python generate_submission.py --checkpoint checkpoints/model_best.h5 --test_dir tfrecords/test --output submission/waymo_submission
 ```
+
+This will:
+- Load your trained model from the checkpoint
+- Process test TFRecord files
+- Generate predictions in the exact format required by the Waymo Challenge:
+  - 20 waypoints per scenario (5 seconds at 4Hz)
+  - Proper proto formatting following the official submission guidelines
+- Save the submission file(s) ready for upload to the challenge website
 
 Where:
 - `--checkpoint_path` specifies the checkpoint to use (replace XX with the checkpoint number)

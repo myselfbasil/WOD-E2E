@@ -6,11 +6,15 @@ data:
   image_width: 640
   num_cameras: 8
   history_seconds: 12
-  future_seconds: 5
   fps: 10
   normalize_poses: true
   train_val_split_ratio: 0.8  # 80% training, 20% validation
   
+# Prediction settings
+prediction:
+  future_seconds: 5  # Waymo Challenge requires 5-second prediction
+  hz: 4  # Waymo Challenge specifies 4Hz (20 points total)
+
 # Model architecture
 model:
   name: "e2e_driving_model"
@@ -23,7 +27,7 @@ model:
   lstm_hidden_dim: 512
   lstm_num_layers: 2
   dropout_rate: 0.1
-  prediction_horizon: 50  # 5 seconds at 10 Hz
+  prediction_horizon: 20  # 5 seconds at 4 Hz as per challenge requirements
   prediction_dim: 2       # x, y coordinates
   use_attention: true
   scenario_classification: true
@@ -39,6 +43,12 @@ training:
   warmup_epochs: 5
   save_freq: 1
   val_freq: 1
+  # Scenario-specific optimization - target weaker areas of current leader
+  scenario_weighting: true
+  scenario_weights:
+    spotlight: 2.0      # Current leader: 6.59 (their weakest)
+    others: 1.8         # Current leader: 6.89 (also weak)
+    construction: 0.8   # Current leader: 8.27 (their strongest)
   
 # Optimizer
 optimizer:
@@ -46,12 +56,14 @@ optimizer:
   beta1: 0.9
   beta2: 0.999
   
-# Loss weights
+# Loss weights - optimized for leaderboard competition
 loss_weights:
   waypoint_loss: 1.0
-  ade_loss: 1.0
-  scenario_classification_loss: 0.5
-  trust_region_loss: 2.0
+  ade_loss: 1.2       # Increased to improve ADE metrics
+  trust_region_loss: 0.7
+  scenario_classification_loss: 0.2
+  smoothness_loss: 0.5  # New loss for trajectory smoothness
+  rfs_loss: 1.5        # Higher weight for RFS optimization
 
 # Evaluation metrics
 metrics:

@@ -9,17 +9,18 @@ import tensorflow_hub as hub
 from typing import Dict, List, Tuple, Optional, Union
 
 
-class AttentionModule(layers.Layer):
-    """Self-attention module for feature enhancement."""
+class EnhancedAttentionModule(layers.Layer):
+    """Enhanced self-attention module with feed-forward network for better feature extraction."""
     
-    def __init__(self, embed_dim: int, num_heads: int = 8, dropout: float = 0.1):
+    def __init__(self, embed_dim: int, num_heads: int = 8, dropout: float = 0.1, ff_dim: int = None):
         """
-        Initialize attention module.
+        Initialize enhanced attention module.
         
         Args:
             embed_dim: Embedding dimension
             num_heads: Number of attention heads
             dropout: Dropout rate
+            ff_dim: Feed-forward dimension (if None, use 4x embed_dim)
         """
         super().__init__()
         self.mha = layers.MultiHeadAttention(
@@ -27,37 +28,61 @@ class AttentionModule(layers.Layer):
             key_dim=embed_dim // num_heads,
             dropout=dropout
         )
-        self.layernorm = layers.LayerNormalization(epsilon=1e-6)
-        self.dropout = layers.Dropout(dropout)
+        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+        self.dropout1 = layers.Dropout(dropout)
+        self.dropout2 = layers.Dropout(dropout)
+        
+        # Feed-forward network for better feature transformation
+        ff_dim = ff_dim or 4 * embed_dim
+        self.ff = tf.keras.Sequential([
+            layers.Dense(ff_dim, activation='gelu'),
+            layers.Dropout(dropout),
+            layers.Dense(embed_dim)
+        ])
     
-    def call(self, x: tf.Tensor, training: bool = False) -> tf.Tensor:
+    def call(self, x: tf.Tensor, training: bool = False, attention_mask: Optional[tf.Tensor] = None) -> tf.Tensor:
         """
-        Apply self-attention to input tensor.
+        Apply enhanced self-attention to input tensor.
         
         Args:
             x: Input tensor of shape [batch_size, seq_len, embed_dim]
             training: Whether in training mode
+            attention_mask: Optional mask for attention
             
         Returns:
             Output tensor of same shape as input
         """
-        attn_output = self.mha(x, x, x, training=training)
-        attn_output = self.dropout(attn_output, training=training)
-        out = self.layernorm(x + attn_output)
-        return out
+        # Multi-head attention with residual connection and normalization
+        attn_output = self.mha(x, x, x, attention_mask=attention_mask, training=training)
+        attn_output = self.dropout1(attn_output, training=training)
+        out1 = self.layernorm1(x + attn_output)
+        
+        # Feed-forward network with residual connection and normalization
+        ff_output = self.ff(out1, training=training)
+        ff_output = self.dropout2(ff_output, training=training)
+        out2 = self.layernorm2(out1 + ff_output)
+        
+        return out2
 
 
-class CrossAttentionModule(layers.Layer):
-    """Cross-attention module for feature fusion."""
+class AttentionModule(EnhancedAttentionModule):
+    """Self-attention module for feature enhancement (backward compatibility)."""
+    pass
+
+
+class EnhancedCrossAttentionModule(layers.Layer):
+    """Enhanced cross-attention module with feed-forward network for better feature fusion."""
     
-    def __init__(self, embed_dim: int, num_heads: int = 8, dropout: float = 0.1):
+    def __init__(self, embed_dim: int, num_heads: int = 8, dropout: float = 0.1, ff_dim: int = None):
         """
-        Initialize cross-attention module.
+        Initialize enhanced cross-attention module.
         
         Args:
             embed_dim: Embedding dimension
             num_heads: Number of attention heads
             dropout: Dropout rate
+            ff_dim: Feed-forward dimension (if None, use 4x embed_dim)
         """
         super().__init__()
         self.mha = layers.MultiHeadAttention(
@@ -65,25 +90,48 @@ class CrossAttentionModule(layers.Layer):
             key_dim=embed_dim // num_heads,
             dropout=dropout
         )
-        self.layernorm = layers.LayerNormalization(epsilon=1e-6)
-        self.dropout = layers.Dropout(dropout)
+        self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
+        self.dropout1 = layers.Dropout(dropout)
+        self.dropout2 = layers.Dropout(dropout)
+        
+        # Feed-forward network for better feature transformation
+        ff_dim = ff_dim or 4 * embed_dim
+        self.ff = tf.keras.Sequential([
+            layers.Dense(ff_dim, activation='gelu'),
+            layers.Dropout(dropout),
+            layers.Dense(embed_dim)
+        ])
     
-    def call(self, x: tf.Tensor, context: tf.Tensor, training: bool = False) -> tf.Tensor:
+    def call(self, x: tf.Tensor, context: tf.Tensor, training: bool = False, attention_mask: Optional[tf.Tensor] = None) -> tf.Tensor:
         """
-        Apply cross-attention to input tensor with context.
+        Apply enhanced cross-attention to input tensor using context.
         
         Args:
-            x: Query tensor of shape [batch_size, seq_len_q, embed_dim]
-            context: Key/value tensor of shape [batch_size, seq_len_kv, embed_dim]
+            x: Query tensor of shape [batch_size, seq_len, embed_dim]
+            context: Key/value tensor of shape [batch_size, context_len, embed_dim]
             training: Whether in training mode
+            attention_mask: Optional mask for attention
             
         Returns:
             Output tensor of same shape as x
         """
-        attn_output = self.mha(x, context, context, training=training)
-        attn_output = self.dropout(attn_output, training=training)
-        out = self.layernorm(x + attn_output)
-        return out
+        # Multi-head attention with residual connection and normalization
+        attn_output = self.mha(x, context, context, attention_mask=attention_mask, training=training)
+        attn_output = self.dropout1(attn_output, training=training)
+        out1 = self.layernorm1(x + attn_output)
+        
+        # Feed-forward network with residual connection and normalization
+        ff_output = self.ff(out1, training=training)
+        ff_output = self.dropout2(ff_output, training=training)
+        out2 = self.layernorm2(out1 + ff_output)
+        
+        return out2
+
+
+class CrossAttentionModule(EnhancedCrossAttentionModule):
+    """Cross-attention module for feature fusion (backward compatibility)."""
+    pass
 
 
 class ImageEncoder(layers.Layer):
