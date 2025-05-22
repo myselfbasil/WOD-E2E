@@ -387,8 +387,14 @@ def main(args):
             # Save checkpoint if better than previous best
             if val_metrics['total_loss'] < best_val_loss:
                 best_val_loss = val_metrics['total_loss']
+                # Save TensorFlow native checkpoint
                 checkpoint_path = checkpoint_manager.save()
-                print(f"Saved checkpoint to {checkpoint_path} (best validation loss: {best_val_loss:.4f})")
+                
+                # Also save the model in H5 format to the main checkpoints directory
+                main_checkpoint_dir = os.path.join(current_dir, config['paths']['checkpoint_dir'])
+                h5_path = os.path.join(main_checkpoint_dir, 'model_best.h5')
+                model.save(h5_path)
+                print(f"Saved checkpoint to {checkpoint_path} and H5 model to {h5_path} (best validation loss: {best_val_loss:.4f})")
         
         # Save regular checkpoint
         if (epoch + 1) % config['training']['save_freq'] == 0:
